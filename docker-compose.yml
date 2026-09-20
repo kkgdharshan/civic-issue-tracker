@@ -1,0 +1,62 @@
+version: '3.8'
+
+services:
+  # 1. PostgreSQL 16 with PostGIS Spatial Engine
+  postgres:
+    image: postgis/postgis:16-3.4-alpine
+    container_name: civicpulse-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: civic_admin
+      POSTGRES_PASSWORD: civic_secure_password_2026
+      POSTGRES_DB: civicpulse
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/init-db.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U civic_admin -d civicpulse"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # 2. Redis 7.2 Cluster Primary (Sliding Window Rate Limit, Idempotency, Pub/Sub)
+  redis:
+    image: redis:7.2-alpine
+    container_name: civicpulse-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "512mb", "--maxmemory-policy", "volatile-lru"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # 3. Next.js 14 Web Application
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: civicpulse-web
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://civic_admin:civic_secure_password_2026@postgres:5432/civicpulse?schema=public
+      REDIS_URL: redis://redis:6379
+      PORT: 3000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  redisdata:

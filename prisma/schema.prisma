@@ -1,0 +1,126 @@
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  directUrl  = env("DIRECT_URL")
+}
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["relationJoins", "metrics"]
+}
+
+enum Role {
+  CITIZEN
+  OFFICIAL
+  ADMIN
+  FIRST_RESPONDER
+}
+
+enum IssueStatus {
+  REPORTED
+  TRIAGED
+  IN_PROGRESS
+  RESOLVED
+  DISMISSED
+}
+
+enum Severity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL_EMERGENCY
+}
+
+model User {
+  id           String       @id @default(uuid()) @db.Uuid
+  email        String       @unique @db.VarChar(255)
+  passwordHash String       @db.VarChar(255)
+  fullName     String       @db.VarChar(120)
+  role         Role         @default(CITIZEN)
+  reputation   Int          @default(1)
+  createdAt    DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime     @updatedAt @db.Timestamptz(6)
+
+  issues       Issue[]      @relation("ReportedIssues")
+  upvotes      Upvote[]
+  auditLogs    AuditTrail[]
+
+  @@index([role, reputation])
+}
+
+model Issue {
+  id             String                                 @id @default(uuid()) @db.Uuid
+  reporterId     String                                 @db.Uuid
+  title          String                                 @db.VarChar(150)
+  description    String                                 @db.Text
+  category       String                                 @db.VarChar(64)
+  status         IssueStatus                            @default(REPORTED)
+  severity       Severity                               @default(MEDIUM)
+  upvoteCount    Int                                    @default(0)
+  version        Int                                    @default(1) // Optimistic Concurrency Control (OCC)
+  
+  // PostGIS spatial coordinate point (WGS84 EPSG:4326)
+  location       Unsupported("geography(Point, 4326)")
+  
+  // Decoupled coordinates for fast scalar index-free queries
+  latitude       Float                                  @db.DoublePrecision
+  longitude      Float                                  @db.DoublePrecision
+  
+  mediaUrls      String[]                               @default([])
+  metadata       Json?                                  @db.JsonB
+  
+  createdAt      DateTime                               @default(now()) @db.Timestamptz(6)
+  updatedAt      DateTime                               @updatedAt @db.Timestamptz(6)
+
+  reporter       User                                   @relation("ReportedIssues", fields: [reporterId], references: [id], onDelete: Restrict)
+  upvotes        Upvote[]
+  auditTrail     AuditTrail[]
+
+  @@index([status, severity, createdAt(sort: Desc)])
+  @@index([reporterId])
+  @@index([createdAt(sort: Desc)])
+}
+
+model Upvote {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  issueId   String   @db.Uuid
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  issue     Issue    @relation(fields: [issueId], references: [id], onDelete: Cascade)
+
+  // Enforce zero double-voting at the database constraint level
+  @@unique([userId, issueId], name: "unique_user_issue_upvote")
+  @@index([issueId])
+}
+
+model AuditTrail {
+  id         String   @id @default(uuid()) @db.Uuid
+  issueId    String   @db.Uuid
+  actorId    String   @db.Uuid
+  action     String   @db.VarChar(64)
+  oldState   Json?    @db.JsonB
+  newState   Json     @db.JsonB
+  ipAddress  String   @db.VarChar(45)
+  userAgent  String?  @db.VarChar(255)
+  createdAt  DateTime @default(now()) @db.Timestamptz(6)
+
+  issue      Issue    @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  actor      User     @relation(fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([issueId, createdAt(sort: Desc)])
+  @@index([actorId])
+}
+
+model OutboxEvent {
+  id          String    @id @default(uuid()) @db.Uuid
+  aggregateId String    @db.Uuid
+  eventType   String    @db.VarChar(100)
+  payload     Json      @db.JsonB
+  processed   Boolean   @default(false)
+  createdAt   DateTime  @default(now()) @db.Timestamptz(6)
+  processedAt DateTime? @db.Timestamptz(6)
+
+  @@index([processed, createdAt])
+}

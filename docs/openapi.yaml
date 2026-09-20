@@ -1,0 +1,216 @@
+openapi: 3.0.3
+info:
+  title: CivicPulse High-Concurrency Telemetry API
+  description: Mission-critical REST API for real-time civic incident ingestion, spatial proximity querying, and optimistic upvoting.
+  version: 2.4.0
+servers:
+  - url: http://localhost:3000/api
+    description: Local Development Server
+  - url: https://api.civicpulse.org/api
+    description: Production Cluster
+
+paths:
+  /issues:
+    post:
+      summary: Ingest Civic Incident Report
+      description: Persists an incident report via an ACID transaction with an idempotency guarantee and queues outbox processing.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Unique transaction key to prevent duplicate writes during network retries.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateIssueInput'
+      responses:
+        '201':
+          description: Incident successfully persisted and queued.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/CivicIssue'
+                  executionMs:
+                    type: integer
+        '400':
+          description: Missing or malformed Idempotency-Key header.
+        '422':
+          description: Schema validation failure.
+        '429':
+          description: Rate limit exceeded (10 requests/minute per IP).
+
+  /issues/nearby:
+    get:
+      summary: Query Incidents by Spatial Radius
+      description: Returns incidents within a specified radius (in meters) using PostGIS spherical ST_DWithin calculation.
+      parameters:
+        - name: lat
+          in: query
+          required: true
+          schema:
+            type: number
+            format: double
+        - name: lng
+          in: query
+          required: true
+          schema:
+            type: number
+            format: double
+        - name: radius
+          in: query
+          required: false
+          schema:
+            type: number
+            default: 5000
+      responses:
+        '200':
+          description: Array of nearby civic issues sorted by distance.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CivicIssue'
+
+  /issues/{id}/upvote:
+    post:
+      summary: Atomic Upvote Incident
+      description: Toggles upvote status for the authenticated user and atomically increments counter with version bump.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Updated issue with incremented upvote count.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CivicIssue'
+        '404':
+          description: Issue ID not found.
+
+  /uploads/presigned-url:
+    post:
+      summary: Generate Direct S3 Presigned Upload URL
+      description: Generates short-lived presigned PUT URL allowing clients to upload compressed media directly to S3.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - contentType
+                - fileSizeBytes
+              properties:
+                contentType:
+                  type: string
+                  enum: [image/jpeg, image/png, image/webp]
+                fileSizeBytes:
+                  type: integer
+                  maximum: 10485760
+      responses:
+        '200':
+          description: Presigned upload URL generated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  uploadUrl:
+                    type: string
+                  fileKey:
+                    type: string
+                  publicUrl:
+                    type: string
+                  expiresInSeconds:
+                    type: integer
+
+components:
+  schemas:
+    CreateIssueInput:
+      type: object
+      required:
+        - title
+        - description
+        - category
+        - severity
+        - latitude
+        - longitude
+      properties:
+        title:
+          type: string
+          minLength: 5
+          maxLength: 150
+        description:
+          type: string
+          minLength: 10
+          maxLength: 5000
+        category:
+          type: string
+          enum: [INFRASTRUCTURE, PUBLIC_SAFETY, ENVIRONMENTAL, HAZARD, UTILITIES]
+        severity:
+          type: string
+          enum: [LOW, MEDIUM, HIGH, CRITICAL_EMERGENCY]
+        latitude:
+          type: number
+          minimum: -90
+          maximum: 90
+        longitude:
+          type: number
+          minimum: -180
+          maximum: 180
+        mediaUrls:
+          type: array
+          items:
+            type: string
+            format: uri
+
+    CivicIssue:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        category:
+          type: string
+        status:
+          type: string
+          enum: [REPORTED, TRIAGED, IN_PROGRESS, RESOLVED, DISMISSED]
+        severity:
+          type: string
+          enum: [LOW, MEDIUM, HIGH, CRITICAL_EMERGENCY]
+        upvoteCount:
+          type: integer
+        hasUpvoted:
+          type: boolean
+        latitude:
+          type: number
+        longitude:
+          type: number
+        distanceMeters:
+          type: number
+        version:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
