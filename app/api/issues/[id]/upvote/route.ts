@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getIssuesStore } from '../../nearby/route';
+import { getIssuesStore } from '@/lib/data/memory-store';
 
 export async function POST(
   req: NextRequest,

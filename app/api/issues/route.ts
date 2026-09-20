@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { CreateIssueSchema } from '@/lib/validations/issue';
 import { CivicIssue } from '@/types/issue';
-import { getIssuesStore } from './nearby/route';
+import { getIssuesStore } from '@/lib/data/memory-store';
 
 // Idempotency cache simulation
 const processedIdempotencyKeys = new Map<string, any>();
